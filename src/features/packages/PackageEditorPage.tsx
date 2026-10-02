@@ -27,6 +27,7 @@ import {
 } from '@/app/api'
 import type { FileVersion, MaterialCategory, MaterialFile } from '@/types/domain'
 import { categoryLabels } from '@/services/mockData'
+import { activeReservation, ruleQuotaSummary } from '@/services/quota'
 
 interface PackageFormValues {
   title: string
@@ -38,6 +39,7 @@ interface PackageFormValues {
   technologyTags: string[]
   personnelScopes: string[]
   declarations: string[]
+  quotaRequested: number
 }
 
 interface FileDraftValues {
@@ -86,6 +88,7 @@ export function PackageEditorPage() {
       technologyTags: packageItem.technologyTags,
       personnelScopes: packageItem.personnelScopes,
       declarations: packageItem.declarations,
+      quotaRequested: packageItem.quotaRequested,
     })
   }, [packageForm, packageItem])
 
@@ -100,12 +103,22 @@ export function PackageEditorPage() {
 
   const rule = data.rules.find((item) => item.id === packageItem.matchedRuleId)
   const packageFindings = data.findings.filter((item) => item.packageId === packageId)
+  const reservation = activeReservation(data, packageId)
+  const quotaSummary = rule ? ruleQuotaSummary(data, rule.id) : undefined
 
   async function savePackageInfo() {
     const values = await packageForm.validateFields()
-    const result = await savePackage({ packageId, patch: values }).unwrap()
-    const matched = result.packages.find((item) => item.id === packageId)
-    message.success(`资料包信息已保存，当前匹配：${result.rules.find((item) => item.id === matched?.matchedRuleId)?.name ?? '无规则'}`)
+    try {
+      const result = await savePackage({ packageId, patch: values }).unwrap()
+      const matched = result.packages.find((item) => item.id === packageId)
+      message.success(`资料包信息已保存，当前匹配：${result.rules.find((item) => item.id === matched?.matchedRuleId)?.name ?? '无规则'}`)
+    } catch (error) {
+      const detail =
+        typeof error === 'object' && error && 'error' in error
+          ? (error as { error?: string }).error
+          : undefined
+      message.error(detail ?? '资料包保存失败')
+    }
   }
 
   async function submitFile() {
@@ -327,7 +340,9 @@ export function PackageEditorPage() {
             <div>
               <strong>许可额度</strong>
               <div className="muted" style={{ marginTop: 5 }}>
-                已使用 {packageItem.quotaUsed} / {packageItem.quotaLimit}
+                规则池（版本 {rule.version}）：上限 {quotaSummary?.limit ?? rule.quotaLimit} · 已扣减{' '}
+                {quotaSummary?.consumed ?? 0} · 预占中 {quotaSummary?.reserved ?? 0} · 可用{' '}
+                {quotaSummary?.available ?? 0}
               </div>
             </div>
           </Space>
@@ -449,6 +464,14 @@ export function PackageEditorPage() {
                 ].map((value) => ({ value, label: value }))}
               />
             </Form.Item>
+            <Form.Item
+              name="quotaRequested"
+              label="申报额度需求"
+              rules={[{ required: true, message: '请填写申报额度需求' }]}
+              extra="提交审批时按此数量预占许可额度，变更后旧预占立即失效重算。"
+            >
+              <InputNumber min={1} max={500} style={{ width: '100%' }} />
+            </Form.Item>
           </Form>
         </section>
 
@@ -471,7 +494,21 @@ export function PackageEditorPage() {
             <div>
               <span className="muted">许可额度</span>
               <div>
-                {packageItem.quotaUsed} / {packageItem.quotaLimit}
+                申报 {packageItem.quotaRequested} · 已扣减 {packageItem.quotaUsed}
+              </div>
+            </div>
+            <div>
+              <span className="muted">额度预占</span>
+              <div>
+                {reservation ? (
+                  <Tag color="processing">
+                    已预占 {reservation.amount} · 第 {reservation.round} 轮
+                  </Tag>
+                ) : packageItem.quotaReviewRequired ? (
+                  <Tag color="warning">待人工核对</Tag>
+                ) : (
+                  <Tag>无有效预占</Tag>
+                )}
               </div>
             </div>
             <div>

@@ -17,6 +17,9 @@ export function DashboardPage() {
   const activePackages = data.packages.filter((item) =>
     ['validating', 'reviewing', 'returned'].includes(item.status),
   )
+  const activeReservations = data.reservations.filter((item) => item.status === 'active')
+  const reservedTotal = activeReservations.reduce((total, item) => total + item.amount, 0)
+  const manualReviewCount = data.packages.filter((item) => item.quotaReviewRequired).length
   const controlledPages = data.files.reduce(
     (total, file) =>
       total +
@@ -118,6 +121,16 @@ export function DashboardPage() {
           <span>处理中资料包</span>
           <strong>{activePackages.length}</strong>
           <small>审批中、已退回或校验中</small>
+        </div>
+        <div className="metric info">
+          <span>额度预占中</span>
+          <strong>{reservedTotal}</strong>
+          <small>{activeReservations.length} 笔有效预占，随审批路线和规则版本绑定</small>
+        </div>
+        <div className="metric warning">
+          <span>待人工核对</span>
+          <strong>{manualReviewCount}</strong>
+          <small>旧数据回填失败的资料包，已阻止扣减</small>
         </div>
         <div className="metric warning">
           <span>受控技术页</span>

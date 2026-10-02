@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 18456",
     "build": "tsc -b && vite build",
-    "preview": "vite preview --host 0.0.0.0 --port 18456"
+    "preview": "vite preview --host 0.0.0.0 --port 18456",
+    "verify": "npm run verify:logic && npm run verify:api",
+    "verify:logic": "esbuild scripts/verify-logic.ts --bundle --platform=node --format=esm --outfile=node_modules/.tmp/verify-logic.mjs --alias:@=./src && node node_modules/.tmp/verify-logic.mjs",
+    "verify:api": "esbuild scripts/verify-api.mts --bundle --platform=node --format=esm --outfile=node_modules/.tmp/verify-api.mjs --alias:@=./src && node node_modules/.tmp/verify-api.mjs"
   },
   "dependencies": {
     "@ant-design/icons": "5.6.1",

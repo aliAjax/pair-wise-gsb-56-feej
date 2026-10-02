@@ -4,9 +4,11 @@ import type {
   MaterialFile,
   MaterialPackage,
   PageReview,
+  QuotaReservation,
   WorkspaceState,
 } from '@/types/domain'
 import { createApprovalRoute, validatePackage } from './rules'
+import { contentSignature, routeSignature } from './quota'
 
 function pages(
   count: number,
@@ -49,6 +51,7 @@ const rules: LicenseRule[] = [
   {
     id: 'rule-sg-composite',
     name: '新加坡复合材料工艺资料许可规则',
+    version: '2026.3',
     categories: ['drawing', 'technical'],
     destinations: ['新加坡'],
     technologyTags: ['复合材料', '工艺参数'],
@@ -61,6 +64,7 @@ const rules: LicenseRule[] = [
   {
     id: 'rule-de-software',
     name: '德国工业软件出口许可规则',
+    version: '2026.3',
     categories: ['software'],
     destinations: ['德国'],
     technologyTags: ['工业控制', '加密算法'],
@@ -73,6 +77,7 @@ const rules: LicenseRule[] = [
   {
     id: 'rule-us-lithography',
     name: '美国半导体光刻技术高级审批规则',
+    version: '2026.3',
     categories: ['drawing', 'technical', 'software'],
     destinations: ['美国'],
     technologyTags: ['半导体', '光刻', '精密运动控制'],
@@ -85,6 +90,7 @@ const rules: LicenseRule[] = [
   {
     id: 'rule-my-general',
     name: '马来西亚一般技术资料许可规则',
+    version: '2026.3',
     categories: ['drawing', 'technical', 'software'],
     destinations: ['马来西亚'],
     technologyTags: [],
@@ -97,6 +103,7 @@ const rules: LicenseRule[] = [
   {
     id: 'rule-global-default',
     name: '全球兜底出口管制规则',
+    version: '2026.3',
     categories: ['drawing', 'technical', 'software'],
     destinations: ['*'],
     technologyTags: [],
@@ -136,6 +143,7 @@ export function createInitialState(): WorkspaceState {
       matchedRuleId: 'rule-sg-composite',
       approvalRoute: createApprovalRoute('enhanced'),
       currentRound: 1,
+      quotaRequested: 10,
       quotaUsed: 36,
       quotaLimit: 80,
       createdAt: '2026-09-20T02:10:00.000Z',
@@ -163,6 +171,7 @@ export function createInitialState(): WorkspaceState {
         decidedAt: '2026-09-27T03:20:00.000Z',
       })),
       currentRound: 1,
+      quotaRequested: 5,
       quotaUsed: 42,
       quotaLimit: 120,
       createdAt: '2026-09-18T04:30:00.000Z',
@@ -194,6 +203,7 @@ export function createInitialState(): WorkspaceState {
           : { ...step },
       ),
       currentRound: 2,
+      quotaRequested: 8,
       quotaUsed: 27,
       quotaLimit: 30,
       createdAt: '2026-09-16T01:15:00.000Z',
@@ -216,6 +226,7 @@ export function createInitialState(): WorkspaceState {
       matchedRuleId: 'rule-my-general',
       approvalRoute: [],
       currentRound: 0,
+      quotaRequested: 5,
       quotaUsed: 8,
       quotaLimit: 100,
       createdAt: '2026-09-28T00:20:00.000Z',
@@ -322,14 +333,51 @@ export function createInitialState(): WorkspaceState {
     }
   })
 
+  const reservationFor = (
+    id: string,
+    packageId: string,
+    status: QuotaReservation['status'],
+    extra: Partial<QuotaReservation> = {},
+  ): QuotaReservation => {
+    const packageItem = packages.find((item) => item.id === packageId)!
+    const rule = rules.find((item) => item.id === packageItem.matchedRuleId)!
+    return {
+      id,
+      packageId,
+      ruleId: rule.id,
+      ruleVersion: rule.version,
+      routeSignature: routeSignature(packageItem.approvalRoute),
+      contentSignature: contentSignature(packageItem),
+      amount: packageItem.quotaRequested,
+      round: packageItem.currentRound,
+      status,
+      createdAt: packageItem.updatedAt,
+      updatedAt: packageItem.updatedAt,
+      ...extra,
+    }
+  }
+  const reservations: QuotaReservation[] = [
+    reservationFor('rsv-001', 'pkg-001', 'active', { createdAt: '2026-09-27T03:00:00.000Z' }),
+    reservationFor('rsv-002', 'pkg-002', 'active', { createdAt: '2026-09-27T03:20:00.000Z' }),
+    reservationFor('rsv-003', 'pkg-003', 'released', {
+      createdAt: '2026-09-26T06:30:00.000Z',
+      releasedAt: '2026-09-26T08:10:00.000Z',
+      note: '审批退回，释放对应占用。',
+    }),
+  ]
+
   const findings = packages.flatMap((packageItem) =>
-    validatePackage(packageItem, files, rules),
+    validatePackage(packageItem, files, rules, {
+      packages,
+      reservations,
+    }),
   )
   return {
     packages,
     files,
     rules,
     findings,
+    reservations,
     comments: [
       {
         id: 'comment-1',
@@ -357,6 +405,33 @@ export function createInitialState(): WorkspaceState {
         operator: '合规专员',
         detail: '拆分为 2 个文件，共 17 页。',
         createdAt: '2026-09-27T02:30:00.000Z',
+      },
+      {
+        id: 'audit-4',
+        packageId: 'pkg-001',
+        action: '提交审批',
+        target: 'EC-2026-001',
+        operator: '周明',
+        detail: '按新加坡复合材料工艺资料许可规则生成审批路线并预占额度 10，第 1 轮。',
+        createdAt: '2026-09-27T03:00:00.000Z',
+      },
+      {
+        id: 'audit-5',
+        packageId: 'pkg-002',
+        action: '提交审批',
+        target: 'EC-2026-002',
+        operator: '赵敏',
+        detail: '按德国工业软件出口许可规则生成审批路线并预占额度 5，第 1 轮。',
+        createdAt: '2026-09-27T02:50:00.000Z',
+      },
+      {
+        id: 'audit-6',
+        packageId: 'pkg-003',
+        action: '释放额度预占',
+        target: 'EC-2026-003',
+        operator: '系统',
+        detail: '审批退回，释放第 2 轮预占 8。',
+        createdAt: '2026-09-26T08:10:00.000Z',
       },
       {
         id: 'audit-2',

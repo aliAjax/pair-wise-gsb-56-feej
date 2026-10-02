@@ -4,8 +4,10 @@ import type {
   LicenseRule,
   MaterialFile,
   MaterialPackage,
+  QuotaReservation,
   ValidationFinding,
   VersionDiff,
+  WorkspaceState,
 } from '@/types/domain'
 
 const levelRank: Record<ApprovalLevel, number> = {
@@ -91,10 +93,20 @@ export function findApplicableRule(
   })[0]
 }
 
+export interface QuotaContext {
+  packages: MaterialPackage[]
+  reservations: QuotaReservation[]
+}
+
+export function quotaContextOf(state: WorkspaceState): QuotaContext {
+  return { packages: state.packages, reservations: state.reservations }
+}
+
 export function validatePackage(
   packageItem: MaterialPackage,
   files: MaterialFile[],
   rules: LicenseRule[],
+  context: QuotaContext = { packages: [packageItem], reservations: [] },
 ): ValidationFinding[] {
   const findings: ValidationFinding[] = []
   const packageFiles = files.filter((file) => file.packageId === packageItem.id)
@@ -136,7 +148,8 @@ export function validatePackage(
     (max, step) => Math.max(max, levelRank[step.level]),
     0,
   )
-  if (currentMaxLevel < levelRank[rule.approvalLevel]) {
+  // 仅校验已生成审批路线的资料包：草稿在提交时会按规则等级生成路线，不构成升级缺口。
+  if (packageItem.approvalRoute.length > 0 && currentMaxLevel < levelRank[rule.approvalLevel]) {
     add(
       'escalation',
       'high',
@@ -145,10 +158,51 @@ export function validatePackage(
     )
   }
 
-  if (packageItem.quotaUsed >= packageItem.quotaLimit) {
-    add('quota', 'high', '许可额度已用尽。', '申请额度调整或拆分至其他有效许可。')
-  } else if (packageItem.quotaLimit - packageItem.quotaUsed <= 10) {
-    add('quota', 'medium', '剩余许可额度不足 10%。', '审批通过前确认额度来源和扣减顺序。')
+  if (packageItem.status !== 'licensed') {
+    // 许可额度按规则共享：全部资料包的已扣减与有效预占都从同一个池子里出账。
+    const consumed = context.packages
+      .filter((item) => item.matchedRuleId === rule.id)
+      .reduce((total, item) => total + item.quotaUsed, 0)
+    const ownReservation = context.reservations.find(
+      (item) => item.packageId === packageItem.id && item.status === 'active',
+    )
+    const reservedByOthers = context.reservations
+      .filter(
+        (item) =>
+          item.ruleId === rule.id && item.status === 'active' && item.packageId !== packageItem.id,
+      )
+      .reduce((total, item) => total + item.amount, 0)
+    const available = rule.quotaLimit - consumed - reservedByOthers
+    const needed = packageItem.quotaRequested
+
+    if (packageItem.quotaReviewRequired) {
+      add(
+        'quota',
+        'high',
+        '旧数据升级时额度预占回填失败，资料包待人工核对。',
+        '人工确认额度来源并重新预占前，系统阻止扣减。',
+      )
+    }
+    if (needed > available) {
+      add(
+        'quota',
+        'high',
+        `许可额度不足：申报需要 ${needed}，规则池可用 ${available}，缺口 ${needed - available}。`,
+        '资料包保留在当前状态，等待额度释放或调整申报额度后重新校验。',
+      )
+    } else if (
+      (packageItem.status === 'reviewing' || packageItem.status === 'approved') &&
+      !ownReservation
+    ) {
+      add(
+        'quota',
+        'high',
+        '进行中的资料包缺少有效额度预占。',
+        '重新提交审批以预占额度，未完成预占前阻止扣减。',
+      )
+    } else if (available - needed <= rule.quotaLimit * 0.1) {
+      add('quota', 'medium', '剩余许可额度不足 10%。', '审批通过前确认额度来源和扣减顺序。')
+    }
   }
 
   packageFiles.forEach((file) => {
@@ -245,4 +299,15 @@ export const approvalLevelLabels: Record<ApprovalLevel, string> = {
   standard: '标准审批',
   enhanced: '升级审批',
   senior: '高级审批',
+}
+
+/**
+ * 重新计算全部资料包的校验结论。
+ * 额度池是跨资料包共享的，任何一笔预占、释放或扣减都可能改变其他资料包的缺口结论。
+ */
+export function refreshFindings(state: WorkspaceState): void {
+  const context = quotaContextOf(state)
+  state.findings = state.packages.flatMap((packageItem) =>
+    validatePackage(packageItem, state.files, state.rules, context),
+  )
 }

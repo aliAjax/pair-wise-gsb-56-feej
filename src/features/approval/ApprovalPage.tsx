@@ -22,6 +22,7 @@ import {
 } from '@/app/api'
 import type { ApprovalStep, MaterialPackage } from '@/types/domain'
 import { approvalLevelLabels } from '@/services/rules'
+import { activeReservation, ruleQuotaSummary } from '@/services/quota'
 
 export function ApprovalPage() {
   const [searchParams] = useSearchParams()
@@ -44,6 +45,9 @@ export function ApprovalPage() {
   )
   const rule = data?.rules.find((item) => item.id === selected?.matchedRuleId)
   const activeStep = selected?.approvalRoute.find((step) => step.status === 'active')
+  const reservation = selected && data ? activeReservation(data, selected.id) : undefined
+  const quotaSummary =
+    selected?.matchedRuleId && data ? ruleQuotaSummary(data, selected.matchedRuleId) : undefined
 
   if (isLoading || !data) return <div className="panel">正在加载审批路线...</div>
   const workspace = data
@@ -68,6 +72,17 @@ export function ApprovalPage() {
       width: 160,
       render: (_, record) =>
         record.approvalRoute.find((step) => step.status === 'active')?.role ?? '无活动步骤',
+    },
+    {
+      title: '额度预占',
+      width: 130,
+      render: (_, record) => {
+        const active = data.reservations.find(
+          (item) => item.packageId === record.id && item.status === 'active',
+        )
+        if (record.quotaReviewRequired) return <Tag color="warning">待人工核对</Tag>
+        return active ? <Tag color="processing">已预占 {active.amount}</Tag> : <Tag>无预占</Tag>
+      },
     },
   ]
 
@@ -146,15 +161,30 @@ export function ApprovalPage() {
 
   async function submitCurrent() {
     if (!selected) return
+    // 额度缺口由服务端裁定（不足时留在草稿并写明缺口），其他高风险项仍在提交前拦截。
     const highFindings = workspace.findings.filter(
-      (item) => item.packageId === selected.id && item.level === 'high',
+      (item) => item.packageId === selected.id && item.level === 'high' && item.type !== 'quota',
     )
     if (highFindings.length) {
       message.error('存在高风险核对项，请先修复后提交')
       return
     }
-    await submitApproval({ packageId: selected.id }).unwrap()
-    message.success('审批路线已生成或重新发起')
+    try {
+      const result = await submitApproval({ packageId: selected.id }).unwrap()
+      if (result.deduplicated) {
+        message.info(
+          `已存在第 ${result.reservation?.round} 轮有效预占 ${result.reservation?.amount}（可能由另一窗口提交），本次未重复占用`,
+        )
+      } else {
+        message.success(`审批路线已生成，并按规则预占额度 ${result.reservation?.amount ?? 0}`)
+      }
+    } catch (error) {
+      const detail =
+        typeof error === 'object' && error && 'error' in error
+          ? (error as { error?: string }).error
+          : undefined
+      message.error(detail ?? '提交审批失败')
+    }
   }
 
   async function confirmDecision() {
@@ -257,6 +287,26 @@ export function ApprovalPage() {
               <Descriptions.Item label="规则等级">
                 {rule ? approvalLevelLabels[rule.approvalLevel] : '未知'}
               </Descriptions.Item>
+              <Descriptions.Item label="额度预占">
+                {reservation ? (
+                  <Space size={4} wrap>
+                    <Tag color="processing">已预占 {reservation.amount}</Tag>
+                    <span className="muted">
+                      第 {reservation.round} 轮 · 规则版本 {reservation.ruleVersion}
+                    </span>
+                  </Space>
+                ) : selected.quotaReviewRequired ? (
+                  <Tag color="warning">待人工核对</Tag>
+                ) : (
+                  '无有效预占'
+                )}
+              </Descriptions.Item>
+              {quotaSummary ? (
+                <Descriptions.Item label="规则额度池">
+                  上限 {quotaSummary.limit} · 已扣减 {quotaSummary.consumed} · 预占中{' '}
+                  {quotaSummary.reserved} · 可用 {quotaSummary.available}
+                </Descriptions.Item>
+              ) : null}
               <Descriptions.Item label="收件方">{selected.recipient}</Descriptions.Item>
               <Descriptions.Item label="最终用途">{selected.endUse}</Descriptions.Item>
               <Descriptions.Item label="未关闭高风险">

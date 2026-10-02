@@ -10,6 +10,7 @@ export type PackageStatus =
 export type ApprovalLevel = 'standard' | 'enhanced' | 'senior'
 export type FindingLevel = 'high' | 'medium' | 'low'
 export type FindingType = 'missing-declaration' | 'escalation' | 'version-mismatch' | 'unclassified-page' | 'quota'
+export type ReservationStatus = 'active' | 'stale' | 'released' | 'consumed'
 
 export interface PageReview {
   id: string
@@ -96,16 +97,42 @@ export interface MaterialPackage {
   matchedRuleId?: string
   approvalRoute: ApprovalStep[]
   currentRound: number
+  quotaRequested: number
   quotaUsed: number
   quotaLimit: number
+  quotaReviewRequired?: boolean
   createdAt: string
   updatedAt: string
   versions: PackageVersion[]
 }
 
+/**
+ * 额度预占记录：提交审批时按匹配规则占用共享额度池。
+ * 与审批路线、规则版本和申报内容签名绑定，任一变化即失效重算。
+ */
+export interface QuotaReservation {
+  id: string
+  packageId: string
+  ruleId: string
+  ruleVersion: string
+  routeSignature: string
+  contentSignature: string
+  amount: number
+  round: number
+  status: ReservationStatus
+  backfilled?: boolean
+  note?: string
+  consumedAmount?: number
+  releasedAmount?: number
+  createdAt: string
+  updatedAt: string
+  releasedAt?: string
+}
+
 export interface LicenseRule {
   id: string
   name: string
+  version: string
   categories: MaterialCategory[]
   destinations: string[]
   technologyTags: string[]
@@ -143,6 +170,21 @@ export interface WorkspaceState {
   findings: ValidationFinding[]
   comments: ReviewComment[]
   audit: AuditEntry[]
+  reservations: QuotaReservation[]
+}
+
+export interface RuleQuotaSummary {
+  ruleId: string
+  limit: number
+  consumed: number
+  reserved: number
+  available: number
+}
+
+export interface SubmitApprovalResult {
+  state: WorkspaceState
+  deduplicated: boolean
+  reservation?: QuotaReservation
 }
 
 export interface VersionDiff {

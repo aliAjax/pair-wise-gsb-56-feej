@@ -22,6 +22,7 @@ import {
 } from '@/app/api'
 import type { LicenseRule } from '@/types/domain'
 import { approvalLevelLabels, findApplicableRule } from '@/services/rules'
+import { activeReservation, ruleQuotaSummary } from '@/services/quota'
 
 export function LicensePage() {
   const [searchParams] = useSearchParams()
@@ -43,12 +44,25 @@ export function LicensePage() {
   const currentRule = data?.rules.find((item) => item.id === selected?.matchedRuleId)
   const packageFindings = data?.findings.filter((item) => item.packageId === selectedId) ?? []
   const hasHighFindings = packageFindings.some((item) => item.level === 'high')
-  const remaining = selected ? selected.quotaLimit - selected.quotaUsed : 0
+  const reservation = selected && data ? activeReservation(data, selected.id) : undefined
+  const quotaSummary =
+    applicableRule && data ? ruleQuotaSummary(data, applicableRule.id) : undefined
+
+  useEffect(() => {
+    if (reservation) setAmount(reservation.amount)
+    else if (selected) setAmount(selected.quotaRequested)
+  }, [reservation, selected])
 
   if (isLoading || !data) return <div className="panel">正在加载许可规则...</div>
 
   const ruleColumns: TableColumnsType<LicenseRule> = [
     { title: '规则名称', dataIndex: 'name', minWidth: 240 },
+    {
+      title: '版本',
+      dataIndex: 'version',
+      width: 90,
+      render: (value: string) => <Tag>{value}</Tag>,
+    },
     {
       title: '国家或地区',
       dataIndex: 'destinations',
@@ -87,8 +101,8 @@ export function LicensePage() {
       message.success(`已扣减 ${amount} 个许可额度`)
     } catch (error) {
       const detail =
-        typeof error === 'object' && error && 'data' in error
-          ? (error.data as { error?: string }).error
+        typeof error === 'object' && error && 'error' in error
+          ? (error as { error?: string }).error
           : undefined
       message.error(detail ?? '额度扣减失败')
     }
@@ -139,7 +153,13 @@ export function LicensePage() {
                   : selected.status === 'licensed'
                     ? '已扣减额度'
                     : '尚未完成审批'}
+                {selected.quotaReviewRequired ? (
+                  <Tag color="warning" style={{ marginLeft: 8 }}>
+                    待人工核对
+                  </Tag>
+                ) : null}
               </Descriptions.Item>
+              <Descriptions.Item label="申报额度">{selected.quotaRequested}</Descriptions.Item>
             </Descriptions>
           ) : null}
         </section>
@@ -213,39 +233,68 @@ export function LicensePage() {
             <h3>许可额度扣减</h3>
             <SafetyCertificateOutlined />
           </div>
-          {selected ? (
+          {selected && quotaSummary ? (
             <Space direction="vertical" size={16} style={{ width: '100%' }}>
               <Progress
-                percent={Math.round((selected.quotaUsed / selected.quotaLimit) * 100)}
-                status={selected.quotaUsed >= selected.quotaLimit ? 'exception' : 'active'}
+                percent={Math.round(
+                  ((quotaSummary.consumed + quotaSummary.reserved) / quotaSummary.limit) * 100,
+                )}
+                status={quotaSummary.available <= 0 ? 'exception' : 'active'}
               />
               <div>
-                已使用 {selected.quotaUsed}，剩余 {remaining}，规则上限 {selected.quotaLimit}
+                规则池上限 {quotaSummary.limit} · 已扣减 {quotaSummary.consumed} · 预占中{' '}
+                {quotaSummary.reserved} · 可用 {quotaSummary.available}
               </div>
+              {reservation ? (
+                <Alert
+                  type="info"
+                  showIcon
+                  message={`本资料包已预占 ${reservation.amount}（第 ${reservation.round} 轮，规则版本 ${reservation.ruleVersion}）`}
+                  description="扣减将从预占中核销，剩余量自动释放回规则池。"
+                />
+              ) : selected.status === 'licensed' ? (
+                <Alert type="success" showIcon message="许可已完成，记录不可改动。" />
+              ) : (
+                <Alert
+                  type="warning"
+                  showIcon
+                  message="缺少有效额度预占，提交审批通过后才能扣减。"
+                />
+              )}
               <InputNumber
                 min={1}
-                max={Math.max(1, remaining)}
+                max={Math.max(1, reservation?.amount ?? 0)}
                 value={amount}
                 onChange={(value) => setAmount(value ?? 1)}
                 addonAfter="额度单位"
                 style={{ width: '100%' }}
+                disabled={!reservation}
               />
               <Button
                 type="primary"
                 block
                 disabled={
                   selected.status !== 'approved' ||
+                  !reservation ||
                   hasHighFindings ||
-                  amount > remaining ||
-                  remaining <= 0
+                  Boolean(selected.quotaReviewRequired) ||
+                  amount > (reservation?.amount ?? 0) ||
+                  amount > quotaSummary.available + (reservation?.amount ?? 0)
                 }
                 loading={deductState.isLoading}
                 onClick={deduct}
               >
                 确认扣减并完成许可
               </Button>
-              {selected.status !== 'approved' ? (
+              {selected.status !== 'approved' && selected.status !== 'licensed' ? (
                 <Alert type="warning" showIcon message="只有全部审批步骤完成后才允许扣减额度。" />
+              ) : null}
+              {selected.quotaReviewRequired ? (
+                <Alert
+                  type="error"
+                  showIcon
+                  message="旧数据升级时无法回填额度预占，资料包待人工核对，已阻止扣减。"
+                />
               ) : null}
               {hasHighFindings ? (
                 <Alert type="error" showIcon message="存在高风险核对项，系统拒绝扣减额度。" />

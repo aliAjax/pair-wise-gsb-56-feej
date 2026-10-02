@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Button, Form, Input, Modal, Select, Space, Table, Tag, message } from 'antd'
+import { Button, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, message } from 'antd'
 import type { TableColumnsType } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
@@ -26,6 +26,7 @@ interface CreatePackageValues {
   technologyTags: string[]
   personnelScopes: string[]
   declarations: string[]
+  quotaRequested: number
 }
 
 export function PackageListPage() {
@@ -93,7 +94,12 @@ export function PackageListPage() {
       title: '状态',
       dataIndex: 'status',
       width: 100,
-      render: (value: MaterialPackage['status']) => <StatusTag status={value} />,
+      render: (value: MaterialPackage['status'], record) => (
+        <Space size={4}>
+          <StatusTag status={value} />
+          {record.quotaReviewRequired ? <Tag color="warning">待核对</Tag> : null}
+        </Space>
+      ),
     },
     {
       title: '操作',
@@ -118,6 +124,7 @@ export function PackageListPage() {
       code: `EC-2026-${String(data!.packages.length + 1).padStart(3, '0')}`,
       status: 'draft',
       quotaUsed: 0,
+      quotaReviewRequired: false,
       quotaLimit:
         findApplicableRule(
           {
@@ -223,6 +230,7 @@ export function PackageListPage() {
             technologyTags: ['通用电气'],
             personnelScopes: [],
             declarations: ['最终用户声明'],
+            quotaRequested: 5,
           }}
         >
           <Form.Item name="title" label="资料包名称" rules={[{ required: true }]}>
@@ -290,6 +298,14 @@ export function PackageListPage() {
                 '技术转移声明',
               ].map((value) => ({ value, label: value }))}
             />
+          </Form.Item>
+          <Form.Item
+            name="quotaRequested"
+            label="申报额度需求"
+            rules={[{ required: true, message: '请填写申报额度需求' }]}
+            extra="提交审批时将按此数量从匹配规则的共享额度池中预占。"
+          >
+            <InputNumber min={1} max={500} style={{ width: '100%' }} />
           </Form.Item>
         </Form>
       </Modal>

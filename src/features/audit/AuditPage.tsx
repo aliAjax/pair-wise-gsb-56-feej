@@ -9,6 +9,7 @@ import {
   useResetWorkspaceMutation,
 } from '@/app/api'
 import type { AuditEntry } from '@/types/domain'
+import { ruleQuotaSummary } from '@/services/quota'
 
 function downloadFile(name: string, content: string, type: string) {
   const blob = new Blob([`\ufeff${content}`], { type })
@@ -85,6 +86,9 @@ export function AuditPage() {
         status: item.status,
         round: item.currentRound,
         rule: workspace.rules.find((rule) => rule.id === item.matchedRuleId)?.name,
+        quotaRequested: item.quotaRequested,
+        quotaUsed: item.quotaUsed,
+        quotaReviewRequired: Boolean(item.quotaReviewRequired),
         files: workspace.files
           .filter((file) => file.packageId === item.id)
           .map((file) => ({
@@ -95,6 +99,16 @@ export function AuditPage() {
             )?.label,
           })),
       })),
+      reservations: workspace.reservations.map((reservation) => ({
+        ...reservation,
+        packageCode: workspace.packages.find((item) => item.id === reservation.packageId)?.code,
+        ruleName: workspace.rules.find((rule) => rule.id === reservation.ruleId)?.name,
+      })),
+      quotaSummary: workspace.rules.map((rule) => ({
+        rule: rule.name,
+        version: rule.version,
+        ...ruleQuotaSummary(workspace, rule.id),
+      })),
       findings: workspace.findings,
       audit: workspace.audit,
     }
@@ -103,7 +117,7 @@ export function AuditPage() {
         action: '导出追溯包',
         target: '全量审批追溯 JSON',
         operator: '当前用户',
-        detail: `导出 ${workspace.packages.length} 个资料包与 ${workspace.audit.length} 条审计记录。`,
+        detail: `导出 ${workspace.packages.length} 个资料包、${workspace.reservations.length} 笔额度预占与 ${workspace.audit.length} 条审计记录。`,
       },
     }).unwrap()
     downloadFile(
