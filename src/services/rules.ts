@@ -8,11 +8,21 @@ import type {
   VersionDiff,
 } from '@/types/domain'
 
+/** 规则额度池快照：已扣减、有效预占与可用额度均在规则级共享 */
+export interface RuleQuotaView {
+  limit: number
+  consumed: number
+  held: number
+  available: number
+}
+
 const levelRank: Record<ApprovalLevel, number> = {
   standard: 1,
   enhanced: 2,
   senior: 3,
 }
+
+export const approvalLevelRank: Record<ApprovalLevel, number> = levelRank
 
 export function createApprovalRoute(level: ApprovalLevel): ApprovalStep[] {
   const standard: ApprovalStep[] = [
@@ -95,6 +105,7 @@ export function validatePackage(
   packageItem: MaterialPackage,
   files: MaterialFile[],
   rules: LicenseRule[],
+  quotaView?: RuleQuotaView,
 ): ValidationFinding[] {
   const findings: ValidationFinding[] = []
   const packageFiles = files.filter((file) => file.packageId === packageItem.id)
@@ -114,6 +125,15 @@ export function validatePackage(
       action,
       ruleId: rule?.id,
     })
+  }
+
+  if (packageItem.manualReviewRequired) {
+    add(
+      'manual-review',
+      'high',
+      '旧数据升级未能回填额度预占，已标记待人工核对。',
+      '由合规专员核对历史占用并在资料包中解除人工核对后，才允许扣减额度。',
+    )
   }
 
   if (!rule) {
@@ -145,7 +165,31 @@ export function validatePackage(
     )
   }
 
-  if (packageItem.quotaUsed >= packageItem.quotaLimit) {
+  if (quotaView) {
+    const requestAmount = Math.max(0, Math.round(packageItem.quotaRequest))
+    if (quotaView.available <= 0) {
+      add(
+        'quota',
+        'high',
+        `规则「${rule.name}」额度池已用尽（上限 ${quotaView.limit}，已扣 ${quotaView.consumed}，预占 ${quotaView.held}）。`,
+        '申请额度调整或拆分至其他有效许可。',
+      )
+    } else if (requestAmount > quotaView.available) {
+      add(
+        'quota',
+        'high',
+        `本包申请 ${requestAmount} 个额度，规则池仅剩 ${quotaView.available} 个，缺口 ${requestAmount - quotaView.available} 个。`,
+        '调减申请额度、等待在途资料包释放预占或申请规则额度。',
+      )
+    } else if (quotaView.available <= Math.max(10, Math.ceil(quotaView.limit * 0.1))) {
+      add(
+        'quota',
+        'medium',
+        `规则池剩余 ${quotaView.available} 个额度（已扣 ${quotaView.consumed}、预占 ${quotaView.held}）。`,
+        '审批通过前确认额度来源和扣减顺序。',
+      )
+    }
+  } else if (packageItem.quotaUsed >= packageItem.quotaLimit) {
     add('quota', 'high', '许可额度已用尽。', '申请额度调整或拆分至其他有效许可。')
   } else if (packageItem.quotaLimit - packageItem.quotaUsed <= 10) {
     add('quota', 'medium', '剩余许可额度不足 10%。', '审批通过前确认额度来源和扣减顺序。')

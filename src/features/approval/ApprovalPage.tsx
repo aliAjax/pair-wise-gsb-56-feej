@@ -22,6 +22,7 @@ import {
 } from '@/app/api'
 import type { ApprovalStep, MaterialPackage } from '@/types/domain'
 import { approvalLevelLabels } from '@/services/rules'
+import { heldReservationFor, ruleQuotaPool } from '@/services/quota'
 
 export function ApprovalPage() {
   const [searchParams] = useSearchParams()
@@ -44,6 +45,9 @@ export function ApprovalPage() {
   )
   const rule = data?.rules.find((item) => item.id === selected?.matchedRuleId)
   const activeStep = selected?.approvalRoute.find((step) => step.status === 'active')
+  const heldReservation = selected && data ? heldReservationFor(data, selected.id) : undefined
+  const quotaPool =
+    selected?.matchedRuleId && data ? ruleQuotaPool(data, selected.matchedRuleId) : undefined
 
   if (isLoading || !data) return <div className="panel">正在加载审批路线...</div>
   const workspace = data
@@ -153,22 +157,38 @@ export function ApprovalPage() {
       message.error('存在高风险核对项，请先修复后提交')
       return
     }
-    await submitApproval({ packageId: selected.id }).unwrap()
-    message.success('审批路线已生成或重新发起')
+    try {
+      const result = await submitApproval({ packageId: selected.id }).unwrap()
+      message.success(result.notice?.message ?? '审批路线已生成或重新发起')
+    } catch (error) {
+      const detail =
+        typeof error === 'object' && error && 'data' in error
+          ? (error.data as { error?: string }).error
+          : undefined
+      message.error(detail ?? '提交失败')
+    }
   }
 
   async function confirmDecision() {
     if (!selected || !decidingStep) return
-    await decideApproval({
-      packageId: selected.id,
-      stepId: decidingStep.id,
-      decision,
-      comment,
-    }).unwrap()
-    message.success(decision === 'approve' ? '审批步骤已通过' : '资料包已退回，进入新一轮补正')
-    setDecisionOpen(false)
-    setComment('')
-    setDecidingStep(undefined)
+    try {
+      await decideApproval({
+        packageId: selected.id,
+        stepId: decidingStep.id,
+        decision,
+        comment,
+      }).unwrap()
+      message.success(decision === 'approve' ? '审批步骤已通过' : '资料包已退回，预占对应释放，进入新一轮补正')
+      setDecisionOpen(false)
+      setComment('')
+      setDecidingStep(undefined)
+    } catch (error) {
+      const detail =
+        typeof error === 'object' && error && 'data' in error
+          ? (error.data as { error?: string }).error
+          : undefined
+      message.error(detail ?? '审批操作失败')
+    }
   }
 
   return (
@@ -266,7 +286,35 @@ export function ApprovalPage() {
                   ).length
                 }
               </Descriptions.Item>
+              <Descriptions.Item label="申请额度">{selected.quotaRequest}</Descriptions.Item>
+              <Descriptions.Item label="额度预占">
+                {heldReservation
+                  ? `已预占 ${heldReservation.amount}（规则版本 ${heldReservation.ruleVersion}，第 ${heldReservation.round} 轮）`
+                  : '无有效预占'}
+              </Descriptions.Item>
+              <Descriptions.Item label="规则额度池">
+                {quotaPool
+                  ? `上限 ${quotaPool.limit} / 已扣 ${quotaPool.consumed} / 预占 ${quotaPool.held} / 可用 ${quotaPool.available}`
+                  : '未匹配规则'}
+              </Descriptions.Item>
             </Descriptions>
+            {selected.manualReviewRequired ? (
+              <Alert
+                type="error"
+                showIcon
+                style={{ marginTop: 12 }}
+                message="旧数据升级待人工核对"
+                description="该资料包无法自动回填预占，已阻止扣减，请在许可页由合规专员核对后解除。"
+              />
+            ) : null}
+            {heldReservation ? (
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginTop: 12 }}
+                message={`预占号 ${heldReservation.id.slice(-12)}，与当前审批路线和规则版本绑定；申报或规则变化会立即失效重算。`}
+              />
+            ) : null}
           </section>
         </div>
       ) : null}

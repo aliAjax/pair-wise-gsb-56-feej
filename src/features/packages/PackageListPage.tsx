@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Button, Form, Input, Modal, Select, Space, Table, Tag, message } from 'antd'
+import { Button, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, message } from 'antd'
 import type { TableColumnsType } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
@@ -26,6 +26,7 @@ interface CreatePackageValues {
   technologyTags: string[]
   personnelScopes: string[]
   declarations: string[]
+  quotaRequest?: number
 }
 
 export function PackageListPage() {
@@ -109,6 +110,7 @@ export function PackageListPage() {
 
   async function submitCreate() {
     const values = await form.validateFields()
+    const quotaRequest = Number(form.getFieldValue('quotaRequest')) || 10
     const now = new Date().toISOString()
     const draft: Omit<
       MaterialPackage,
@@ -117,6 +119,7 @@ export function PackageListPage() {
       ...values,
       code: `EC-2026-${String(data!.packages.length + 1).padStart(3, '0')}`,
       status: 'draft',
+      quotaRequest,
       quotaUsed: 0,
       quotaLimit:
         findApplicableRule(
@@ -127,6 +130,7 @@ export function PackageListPage() {
             status: 'draft',
             approvalRoute: [],
             currentRound: 0,
+            quotaRequest,
             quotaUsed: 0,
             quotaLimit: 0,
             createdAt: now,
@@ -137,7 +141,7 @@ export function PackageListPage() {
         )?.quotaLimit ?? 20,
     }
     const result = await createPackage({ package: draft }).unwrap()
-    const created = result.packages.find((item) => item.code === draft.code)
+    const created = result.state.packages.find((item) => item.code === draft.code)
     message.success('资料包已创建')
     setOpen(false)
     form.resetFields()
@@ -277,6 +281,14 @@ export function PackageListPage() {
                 label: value,
               }))}
             />
+          </Form.Item>
+          <Form.Item
+            name="quotaRequest"
+            label="申请许可额度"
+            initialValue={10}
+            extra="提交审批时按此数额在规则额度池预占，额度不足将留在草稿并提示缺口。"
+          >
+            <InputNumber min={1} max={9999} style={{ width: '100%' }} addonAfter="额度单位" />
           </Form.Item>
           <Form.Item name="declarations" label="已提供声明">
             <Select

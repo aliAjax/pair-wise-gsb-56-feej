@@ -183,7 +183,7 @@ export function DashboardPage() {
             <div>
               <strong>额度控制</strong>
               <p className="muted">
-                审批完成后才允许扣减许可额度，超额度或额度不足时拒绝执行。
+                额度在规则级共享：提交审批即按规则预占，额度不足留在草稿并写明缺口；扣减以有效预占为准，许可台账不可改。
               </p>
             </div>
           </Space>

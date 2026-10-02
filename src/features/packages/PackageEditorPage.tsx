@@ -27,6 +27,7 @@ import {
 } from '@/app/api'
 import type { FileVersion, MaterialCategory, MaterialFile } from '@/types/domain'
 import { categoryLabels } from '@/services/mockData'
+import { heldReservationFor, ruleQuotaPool } from '@/services/quota'
 
 interface PackageFormValues {
   title: string
@@ -38,6 +39,7 @@ interface PackageFormValues {
   technologyTags: string[]
   personnelScopes: string[]
   declarations: string[]
+  quotaRequest: number
 }
 
 interface FileDraftValues {
@@ -86,6 +88,7 @@ export function PackageEditorPage() {
       technologyTags: packageItem.technologyTags,
       personnelScopes: packageItem.personnelScopes,
       declarations: packageItem.declarations,
+      quotaRequest: packageItem.quotaRequest,
     })
   }, [packageForm, packageItem])
 
@@ -100,12 +103,22 @@ export function PackageEditorPage() {
 
   const rule = data.rules.find((item) => item.id === packageItem.matchedRuleId)
   const packageFindings = data.findings.filter((item) => item.packageId === packageId)
+  const quotaPool = rule ? ruleQuotaPool(data, rule.id) : undefined
+  const heldReservation = heldReservationFor(data, packageId)
 
   async function savePackageInfo() {
     const values = await packageForm.validateFields()
     const result = await savePackage({ packageId, patch: values }).unwrap()
-    const matched = result.packages.find((item) => item.id === packageId)
-    message.success(`资料包信息已保存，当前匹配：${result.rules.find((item) => item.id === matched?.matchedRuleId)?.name ?? '无规则'}`)
+    const matched = result.state.packages.find((item) => item.id === packageId)
+    message.success(
+      `资料包信息已保存，当前匹配：${result.state.rules.find((item) => item.id === matched?.matchedRuleId)?.name ?? '无规则'}`,
+    )
+    if (result.notice) {
+      const { message: text } = result.notice
+      if (result.notice.type === 'error') message.error(text)
+      else if (result.notice.type === 'warning') message.warning(text)
+      else message.info(text)
+    }
   }
 
   async function submitFile() {
@@ -165,7 +178,7 @@ export function PackageEditorPage() {
 
   async function runValidation() {
     const result = await validatePackage({ packageId }).unwrap()
-    const count = result.findings.filter((item) => item.packageId === packageId).length
+    const count = result.state.findings.filter((item) => item.packageId === packageId).length
     message.success(`许可匹配校验完成，共 ${count} 项结论`)
   }
 
@@ -325,10 +338,23 @@ export function PackageEditorPage() {
               </div>
             </div>
             <div>
-              <strong>许可额度</strong>
+              <strong>许可额度池（规则级共享）</strong>
               <div className="muted" style={{ marginTop: 5 }}>
-                已使用 {packageItem.quotaUsed} / {packageItem.quotaLimit}
+                {quotaPool
+                  ? `上限 ${quotaPool.limit}，已扣 ${quotaPool.consumed}，预占 ${quotaPool.held}，可用 ${quotaPool.available}`
+                  : '暂无匹配规则'}
               </div>
+              <div className="muted" style={{ marginTop: 5 }}>
+                本包申请 {packageItem.quotaRequest}
+                {heldReservation
+                  ? `，当前预占 ${heldReservation.amount}（第 ${heldReservation.round} 轮，规则版本 ${heldReservation.ruleVersion}）`
+                  : '，尚无有效预占'}
+              </div>
+              {packageItem.manualReviewRequired ? (
+                <Tag color="error" style={{ marginTop: 6 }}>
+                  旧数据升级待人工核对，已阻止扣减
+                </Tag>
+              ) : null}
             </div>
           </Space>
         </div>
@@ -449,6 +475,13 @@ export function PackageEditorPage() {
                 ].map((value) => ({ value, label: value }))}
               />
             </Form.Item>
+            <Form.Item
+              name="quotaRequest"
+              label="申请许可额度"
+              extra="提交审批时按此数额在规则额度池预占，修改保存后在途预占立即重算。"
+            >
+              <InputNumber min={1} max={9999} style={{ width: '100%' }} addonAfter="额度单位" />
+            </Form.Item>
           </Form>
         </section>
 
@@ -469,9 +502,13 @@ export function PackageEditorPage() {
               <div>{packageItem.currentRound ? `第 ${packageItem.currentRound} 轮` : '未提交'}</div>
             </div>
             <div>
-              <span className="muted">许可额度</span>
+              <span className="muted">额度预占</span>
               <div>
-                {packageItem.quotaUsed} / {packageItem.quotaLimit}
+                {heldReservation
+                  ? `已预占 ${heldReservation.amount} / 申请 ${packageItem.quotaRequest}`
+                  : quotaPool
+                    ? `未预占，池内可用 ${quotaPool.available}`
+                    : '未匹配规则'}
               </div>
             </div>
             <div>
